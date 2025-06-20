@@ -349,9 +349,9 @@ def create_subtitle_recognition_ui():
         
         with gr.Row():
             with gr.Column(scale=1):
-                # S3配置区域
-                s3_path = gr.Textbox(
-                    label="S3存储路径",
+                # S3配置区域（从左侧栏加载，这里保持UI一致性）
+                subtitle_s3_path = gr.Textbox(
+                    label="待处理视频S3存储路径",
                     placeholder="例如: s3://bucket-name/folder/",
                     value="s3://general-demo-3/madhouse-ads-videos/subtitle-screen-shots/french1/"
                 )
@@ -416,7 +416,7 @@ def create_subtitle_recognition_ui():
         
         browse_button.click(
             fn=update_gallery, 
-            inputs=s3_path, 
+            inputs=subtitle_s3_path, 
             outputs=[image_gallery, image_keys]
         )
         
@@ -432,14 +432,14 @@ def create_subtitle_recognition_ui():
                 print(f"图片选择错误: {str(e)}")
                 return None
             
-        image_gallery.select(fn=handle_select, inputs=[s3_path, image_keys], outputs=selected_image)
+        image_gallery.select(fn=handle_select, inputs=[subtitle_s3_path, image_keys], outputs=selected_image)
         extract_button.click(
             fn=extract_text, 
             inputs=[selected_image, model_dropdown, language_dropdown, system_prompt, user_prompt],
             outputs=result_text
         )
         
-        return subtitle_ui, image_keys
+        return subtitle_ui, image_keys, subtitle_s3_path
 
 def extract_video_frames(video_path, x, y, width, height, fps):
     """从视频中提取指定区域的帧"""
@@ -517,7 +517,7 @@ def create_video_subtitles_ui():
         # 创建状态变量存储视频元数据
         video_keys = gr.State([])
         video_urls = gr.State([])
-        area_selection = gr.State({"x": 0, "y": 0, "width": 100, "height": 100})
+        area_selection = gr.State({"x": 120, "y": 1300, "width": 850, "height": 220})
         
         # 全局变量存储提取的帧路径
         global extracted_frame_paths
@@ -526,8 +526,8 @@ def create_video_subtitles_ui():
         # S3视频和本地上传整合在同一页面
         with gr.Row():
             with gr.Column(scale=1):
-                # S3配置区域
-                s3_path = gr.Textbox(
+                # S3配置区域（从左侧栏加载，这里保持UI一致性）
+                video_s3_path = gr.Textbox(
                     label="S3视频存储路径",
                     placeholder="例如: s3://bucket-name/videos/",
                     value="s3://general-demo-3/madhouse-ads-videos/"
@@ -589,12 +589,12 @@ def create_video_subtitles_ui():
                 
                 # 区域选择坐标
                 with gr.Row():
-                    x_input = gr.Number(label="X 坐标", value=0, step=1)
-                    y_input = gr.Number(label="Y 坐标", value=0, step=1)
+                    x_input = gr.Number(label="X 坐标", value=120, step=1)
+                    y_input = gr.Number(label="Y 坐标", value=1300, step=1)
                 
                 with gr.Row():
-                    width_input = gr.Number(label="宽度", value=100, step=1)
-                    height_input = gr.Number(label="高度", value=100, step=1)
+                    width_input = gr.Number(label="宽度", value=850, step=1)
+                    height_input = gr.Number(label="高度", value=220, step=1)
                 
                 with gr.Row():
                     fps_input = gr.Slider(
@@ -615,14 +615,6 @@ def create_video_subtitles_ui():
                     lines=4,
                     interactive=False
                 )
-                
-                gr.Markdown("""
-                ### 坐标系统说明
-                - 坐标原点 (0,0) 位于视频的左上角
-                - X轴向右增加，Y轴向下增加
-                - 上传视频后会显示完整的分辨率信息
-                - 请确保选取的区域在视频分辨率范围内
-                """)
 
             with gr.Column(scale=2):
                 # 提取的帧展示
@@ -634,10 +626,10 @@ def create_video_subtitles_ui():
                 
                 # 添加S3上传功能
                 with gr.Row():
-                    s3_upload_path = gr.Textbox(
+                    upload_s3_path = gr.Textbox(
                         label="S3 上传目录",
                         placeholder="例如: s3://bucket-name/screenshots/",
-                        value="s3://general-demo-3/madhouse-ads-videos/extracted-frames/"
+                        value="s3://general-demo-3/madhouse-ads-videos/subtitle-screen-shots/"
                     )
                     s3_upload_button = gr.Button("上传到S3", variant="primary")
                 
@@ -706,16 +698,12 @@ def create_video_subtitles_ui():
                     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                     duration = frame_count / fps if fps > 0 else 0
                     
-                    # 设置视频信息文本
+                    # 设置视频信息文本（不包含坐标系统信息，避免重复）
                     video_info = f"文件名: {file_name}\n"
                     video_info += f"大小: {file_size/1024/1024:.2f} MB\n"
                     video_info += f"分辨率: {width}x{height} 像素\n"
                     video_info += f"帧率: {fps:.2f} fps\n"
-                    video_info += f"时长: {duration/60:.2f} 分钟\n\n"
-                    video_info += "坐标系统信息:\n"
-                    video_info += "- 原点 (0,0) 位于视频左上角\n"
-                    video_info += f"- X轴: 向右，范围 0-{width-1} 像素\n"
-                    video_info += f"- Y轴: 向下，范围 0-{height-1} 像素\n"
+                    video_info += f"时长: {duration/60:.2f} 分钟\n"
                     
                     # 更新默认选区的尺寸为视频的1/4区域
                     default_width = width // 4
@@ -900,7 +888,7 @@ def create_video_subtitles_ui():
         # 注册事件处理
         browse_button.click(
             fn=update_s3_video_list,
-            inputs=s3_path,
+            inputs=video_s3_path,
             outputs=[s3_video_list, video_keys, video_urls]
         )
         
@@ -943,11 +931,11 @@ def create_video_subtitles_ui():
         # S3上传按钮事件
         s3_upload_button.click(
             fn=upload_frames_to_s3,
-            inputs=s3_upload_path,
+            inputs=upload_s3_path,
             outputs=s3_upload_result
         )
         
-        return video_ui
+        return video_ui, video_s3_path, upload_s3_path
 
 def create_app():
     """创建主应用"""
@@ -958,6 +946,11 @@ def create_app():
         image_keys = gr.State([])
         current_tab = gr.State("video")  # 默认为视频字幕获取标签页
         
+        # 创建全局S3路径状态变量
+        s3_videos_path_state = gr.State("s3://general-demo-3/madhouse-ads-videos/")
+        s3_screenshots_path_state = gr.State("s3://general-demo-3/madhouse-ads-videos/subtitle-screen-shots/french1/")
+        s3_upload_path_state = gr.State("s3://general-demo-3/madhouse-ads-videos/subtitle-screen-shots/")
+        
         with gr.Row():
             # 左侧导航栏 (1/5宽度)
             with gr.Column(scale=1):
@@ -965,6 +958,31 @@ def create_app():
                 with gr.Column():
                     video_btn = gr.Button("视频字幕获取", variant="primary")
                     subtitle_btn = gr.Button("字幕截图文字识别", variant="secondary")
+                
+                # S3配置区域
+                gr.Markdown("### S3路径设置", elem_id="s3-settings-title")
+                
+                # 各种S3路径输入框
+                s3_videos_path = gr.Textbox(
+                    label="视频存储路径",
+                    placeholder="例如: s3://bucket-name/videos/",
+                    value="s3://general-demo-3/madhouse-ads-videos/",
+                )
+                
+                s3_screenshots_path = gr.Textbox(
+                    label="字幕截图路径",
+                    placeholder="例如: s3://bucket-name/screenshots/",
+                    value="s3://general-demo-3/madhouse-ads-videos/subtitle-screen-shots/french1/"
+                )
+                
+                s3_upload_path = gr.Textbox(
+                    label="上传目录路径",
+                    placeholder="例如: s3://bucket-name/uploads/",
+                    value="s3://general-demo-3/madhouse-ads-videos/subtitle-screen-shots/"
+                )
+                
+                # 加载设置按钮
+                load_settings_btn = gr.Button("加载设置", variant="primary")
             
             # 右侧内容区 (4/5宽度)
             with gr.Column(scale=4):
@@ -974,10 +992,10 @@ def create_app():
                 
                 # 向容器中添加UI组件
                 with subtitle_container:
-                    subtitle_ui, image_keys = create_subtitle_recognition_ui()
+                    subtitle_ui, image_keys, subtitle_s3_path = create_subtitle_recognition_ui()
                 
                 with video_container:
-                    video_ui = create_video_subtitles_ui()
+                    video_ui, video_s3_path, upload_s3_path = create_video_subtitles_ui()
         
         # 导航切换事件处理
         def show_subtitle_tab():
@@ -995,6 +1013,22 @@ def create_app():
                 subtitle_btn: gr.Button(variant="secondary"),
                 video_btn: gr.Button(variant="primary")
             }
+            
+        # 加载S3设置函数
+        def load_s3_settings(videos_path, screenshots_path, upload_path):
+            # 更新状态变量
+            return {
+                # 更新字幕识别UI中的路径
+                subtitle_s3_path: gr.Textbox(value=screenshots_path),
+                # 更新视频字幕UI中的路径
+                video_s3_path: gr.Textbox(value=videos_path),
+                # 更新上传路径
+                upload_s3_path: gr.Textbox(value=upload_path),
+                # 更新状态变量
+                s3_videos_path_state: videos_path,
+                s3_screenshots_path_state: screenshots_path,
+                s3_upload_path_state: upload_path
+            }
         
         # 注册导航按钮点击事件
         subtitle_btn.click(
@@ -1007,6 +1041,20 @@ def create_app():
             fn=show_video_tab,
             inputs=None,
             outputs=[subtitle_container, video_container, subtitle_btn, video_btn]
+        )
+        
+        # 注册加载设置按钮事件
+        load_settings_btn.click(
+            fn=load_s3_settings,
+            inputs=[s3_videos_path, s3_screenshots_path, s3_upload_path],
+            outputs=[
+                subtitle_s3_path,                          # 字幕识别UI中的路径
+                video_s3_path,                             # 视频字幕UI中的视频路径
+                upload_s3_path,                            # 上传路径
+                s3_videos_path_state,                      # 状态变量
+                s3_screenshots_path_state,
+                s3_upload_path_state
+            ]
         )
         
     return demo
