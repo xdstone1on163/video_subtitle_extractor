@@ -705,11 +705,11 @@ def create_video_subtitles_ui():
                     video_info += f"帧率: {fps:.2f} fps\n"
                     video_info += f"时长: {duration/60:.2f} 分钟\n"
                     
-                    # 更新默认选区的尺寸为视频的1/4区域
-                    default_width = width // 4
-                    default_height = height // 4
-                    default_x = (width - default_width) // 2
-                    default_y = (height - default_height) // 2
+                    # 使用固定的默认值而不是根据视频大小计算
+                    default_x = 120
+                    default_y = 1300
+                    default_width = 850
+                    default_height = 220
                     
                     # HTML显示
                     dimensions_html = f"""
@@ -920,6 +920,16 @@ def create_video_subtitles_ui():
             fn=update_area_selection,
             inputs=[x_input, y_input, width_input, height_input],
             outputs=area_selection
+        )
+        
+        # 确保始终保持默认值
+        def reset_to_defaults():
+            return 120, 1300, 850, 220
+            
+        video_s3_path.change(
+            fn=reset_to_defaults,
+            inputs=[],
+            outputs=[x_input, y_input, width_input, height_input]
         )
         
         extract_button.click(
