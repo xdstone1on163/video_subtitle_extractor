@@ -518,6 +518,8 @@ def create_video_subtitles_ui():
         video_keys = gr.State([])
         video_urls = gr.State([])
         area_selection = gr.State({"x": 120, "y": 1300, "width": 850, "height": 220})
+        # 存储选中需要删除的帧索引
+        selected_frames = gr.State([])
         
         # 全局变量存储提取的帧路径
         global extracted_frame_paths
@@ -621,8 +623,20 @@ def create_video_subtitles_ui():
                 extracted_frames = gr.Gallery(
                     label="提取的帧",
                     columns=3,
-                    height=400
+                    height=400,
+                    elem_id="extracted_frames_gallery"
                 )
+                
+                # 添加索引输入框，用于选择要删除的帧
+                delete_frame_index = gr.Number(
+                    label="输入要删除的帧索引 (从0开始)",
+                    value=0,
+                    step=1,
+                    precision=0
+                )
+                
+                # 添加删除按钮
+                delete_frames_btn = gr.Button("删除选中的帧", variant="secondary")
                 
                 # 添加S3上传功能
                 with gr.Row():
@@ -936,6 +950,34 @@ def create_video_subtitles_ui():
             fn=extract_frames_from_video,
             inputs=[upload_video, area_selection, fps_input],
             outputs=[extract_info, extracted_frames]
+        )
+        
+        # 删除指定索引的帧
+        def delete_frame_by_index(index):
+            global extracted_frame_paths
+            
+            index = int(index) # 确保是整数
+            
+            if not extracted_frame_paths:
+                return "没有可删除的帧，请先提取视频帧", extracted_frame_paths
+                
+            # 确保索引在有效范围内
+            if index >= 0 and index < len(extracted_frame_paths):
+                # 删除指定索引的帧
+                deleted_path = extracted_frame_paths.pop(index)
+                
+                # 更新提示信息
+                result = f"已删除索引为 {index} 的帧，当前剩余 {len(extracted_frame_paths)} 帧"
+                
+                return result, extracted_frame_paths
+            else:
+                return f"无效的索引: {index}。有效范围: 0-{len(extracted_frame_paths)-1}", extracted_frame_paths
+        
+        # 注册删除按钮事件
+        delete_frames_btn.click(
+            fn=delete_frame_by_index,
+            inputs=delete_frame_index,
+            outputs=[s3_upload_result, extracted_frames]
         )
         
         # S3上传按钮事件
