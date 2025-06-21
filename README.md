@@ -1,6 +1,12 @@
 # 视频字幕工具
 
 这是一个综合性的视频字幕工具，集成了视频字幕获取和字幕截图文字识别功能，利用AWS云服务（Bedrock、Transcribe、Translate、S3）实现高效的视频字幕处理流程。
+这是视频功能演示：
+
+
+https://github.com/user-attachments/assets/96d97bba-6862-4935-8ad4-cf7d39b5af53
+
+
 
 ## 主要功能
 
