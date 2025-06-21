@@ -425,16 +425,11 @@ def create_subtitle_recognition_ui():
                     elem_id="extracted_frames_gallery"
                 )
                 
-                # 添加索引输入框，用于选择要删除的帧
-                delete_frame_index = gr.Number(
-                    label="输入要删除的帧索引 (从0开始)",
-                    value=0,
-                    step=1,
-                    precision=0
-                )
-                
-                # 添加删除按钮
+                # 添加删除按钮 - 不再需要索引输入框
                 delete_frames_btn = gr.Button("删除选中的帧", variant="secondary")
+                
+                # 添加状态变量存储当前选中的帧索引
+                selected_frame_index = gr.State(None)
                 
                 # 添加S3上传功能
                 with gr.Row():
@@ -473,8 +468,8 @@ def create_subtitle_recognition_ui():
                 # 提示词
                 system_prompt = gr.Textbox(
                     label="系统提示词",
-                    value="你是一个小语种字幕提取专家",
-                    lines=2
+                    value="你是一个小语种字幕提取专家，你知道大部分字幕文字都出现在视频中间靠下的部分，字幕的颜色一般都是红色或者白色或者黄色等比较显眼的颜色，字幕的字体一般也会比较大，为了和背景更好的区分。图片里可能还有一些其他的文字出现，如果你判断不是字幕相关的你会忽略",
+                    lines=4
                 )
                 
                 user_prompt = gr.Textbox(
@@ -757,10 +752,31 @@ def create_subtitle_recognition_ui():
             outputs=[extract_info, extracted_frames]
         )
         
+        # 添加帧选择事件处理函数
+        def handle_frame_select(evt: gr.SelectData):
+            """处理帧选择事件，记录选中的帧索引"""
+            selected_index = evt.index
+            return selected_index
+            
+        # 注册帧选择事件
+        extracted_frames.select(
+            fn=handle_frame_select,
+            inputs=[],
+            outputs=selected_frame_index
+        )
+        
+        # 修改删除帧事件处理函数，使用选中的帧索引
+        def delete_selected_frame(selected_index):
+            """删除选中的帧"""
+            if selected_index is None:
+                return "请先选择要删除的帧", extracted_frame_paths
+            
+            return delete_frame_by_index(selected_index)
+            
         # 注册删除帧事件
         delete_frames_btn.click(
-            fn=delete_frame_by_index,
-            inputs=delete_frame_index,
+            fn=delete_selected_frame,
+            inputs=selected_frame_index,
             outputs=[s3_upload_result, extracted_frames]
         )
         
