@@ -105,6 +105,81 @@ export AWS_DEFAULT_REGION=us-west-2
 
 要使这些设置持久化，可以将它们添加到`~/.bashrc`或`~/.profile`文件中。
 
+### AWS权限要求
+
+使用此应用程序需要以下AWS服务的权限：
+
+#### 1. Amazon S3权限
+- `s3:ListBucket` - 列出S3存储桶中的对象
+- `s3:GetObject` - 从S3获取视频和图片文件
+- `s3:PutObject` - 将截图和字幕文件上传到S3
+- `s3:HeadBucket` - 验证存储桶是否存在
+
+#### 2. Amazon Transcribe权限
+- `transcribe:StartTranscriptionJob` - 启动视频转录任务
+- `transcribe:GetTranscriptionJob` - 获取转录任务状态和结果
+
+#### 3. Amazon Translate权限
+- `translate:TranslateText` - 将字幕翻译成中文
+
+#### 4. Amazon Bedrock权限
+- `bedrock:InvokeModel` - 调用Bedrock模型进行图像文本识别
+- 特别需要确保有权访问以下模型：
+  - Claude 3系列模型（Opus、Sonnet、Haiku等）
+  - Nova系列模型（如需使用）
+
+#### IAM策略示例
+
+以下是一个最小权限IAM策略示例：
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:HeadBucket"
+            ],
+            "Resource": [
+                "arn:aws:s3:::your-bucket-name",
+                "arn:aws:s3:::your-bucket-name/*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "transcribe:StartTranscriptionJob",
+                "transcribe:GetTranscriptionJob"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "translate:TranslateText"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "bedrock:InvokeModel"
+            ],
+            "Resource": [
+                "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-3*",
+                "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova*"
+            ]
+        }
+    ]
+}
+```
+
+请根据您的实际需求和安全策略调整上述权限。建议遵循最小权限原则，只授予应用程序所需的必要权限。
+
 ### 步骤5: 启动应用
 
 ```bash
