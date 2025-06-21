@@ -441,6 +441,342 @@ def create_subtitle_recognition_ui():
         
         return subtitle_ui, image_keys, subtitle_s3_path
 
+def transcribe_video(s3_video_path, language_code):
+    """使用AWS Transcribe服务转录S3视频中的语音"""
+    try:
+        # 创建Transcribe客户端，指定us-west-2区域
+        transcribe_client = boto3.client('transcribe', region_name='us-west-2')
+        
+        # 生成唯一的任务名称
+        job_name = f"transcribe-job-{uuid.uuid4()}"
+        
+        # 将语言代码映射到AWS Transcribe支持的格式
+        language_mapping = {
+            "SA": "ar-SA",  # 阿拉伯语
+            "JP": "ja-JP",  # 日语
+            "KR": "ko-KR",  # 韩语
+            "FR": "fr-FR",  # 法语
+            "IT": "it-IT",  # 意大利语
+            "DE": "de-DE",  # 德语
+            "UA": "uk-UA",  # 乌克兰语
+            "TR": "tr-TR"   # 土耳其语
+        }
+        
+        # 获取对应的AWS Transcribe语言代码
+        aws_language_code = language_mapping.get(language_code, "en-US")  # 默认使用英语
+        
+        # 解析S3路径
+        if s3_video_path.startswith('s3://'):
+            s3_video_path = s3_video_path[5:]  # 移除's3://'前缀
+            
+        # 获取文件扩展名
+        file_extension = s3_video_path.split('.')[-1].lower()
+        # 映射文件扩展名到媒体格式
+        media_format_mapping = {
+            'mp4': 'mp4',
+            'mov': 'mov',
+            'avi': 'avi',
+            'mkv': 'mkv',
+            'wmv': 'wmv'
+        }
+        media_format = media_format_mapping.get(file_extension, 'mp4')  # 默认使用mp4
+        
+        # 解析bucket和key
+        parts = s3_video_path.strip('/').split('/', 1)
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ""
+        
+        # 启动转录任务
+        # 确保MediaFileUri是正确的S3 URI格式
+        if not s3_video_path.startswith('s3://'):
+            s3_uri = f"s3://{bucket}/{key}"
+        else:
+            s3_uri = s3_video_path
+            
+        print(f"使用S3 URI: {s3_uri}")
+        
+        # 检查bucket是否存在
+        s3_client = boto3.client('s3')
+        try:
+            s3_client.head_bucket(Bucket=bucket)
+            print(f"确认S3存储桶存在: {bucket}")
+            
+            # 配置字幕输出
+            subtitle_formats = ["srt", "vtt"]
+            
+            # 启动转录任务，包含字幕输出配置
+            response = transcribe_client.start_transcription_job(
+                TranscriptionJobName=job_name,
+                Media={'MediaFileUri': s3_uri},
+                MediaFormat=media_format,
+                LanguageCode=aws_language_code,
+                Subtitles={
+                    'Formats': subtitle_formats,
+                    'OutputStartIndex': 1
+                }
+            )
+            
+            # 返回任务名称和初始状态
+            return {
+                "status": "STARTED",
+                "job_name": job_name,
+                "message": f"已启动转录任务 {job_name}，正在处理中...\n\n任务可能需要几分钟到几小时不等，具体取决于视频长度。\n请点击'检查任务状态'按钮查看进度。"
+            }
+            
+        except Exception as bucket_error:
+            print(f"检查存储桶时出错: {str(bucket_error)}")
+            return {
+                "status": "ERROR",
+                "message": f"转录错误: 无法访问存储桶 {bucket}，请确认存储桶存在且有访问权限"
+            }
+            
+    except Exception as e:
+        return {
+            "status": "ERROR",
+            "message": f"转录错误: {str(e)}"
+        }
+
+def translate_text(text, source_language_code):
+    """使用AWS Translate将文本翻译成中文"""
+    try:
+        # 创建Translate客户端
+        translate_client = boto3.client('translate', region_name='us-west-2')
+        
+        # 调用翻译API
+        response = translate_client.translate_text(
+            Text=text,
+            SourceLanguageCode=source_language_code,
+            TargetLanguageCode='zh'  # 中文
+        )
+        
+        # 返回翻译结果
+        return response['TranslatedText']
+    except Exception as e:
+        print(f"翻译错误: {str(e)}")
+        return f"[翻译失败: {str(e)}]"
+
+def parse_subtitle_file(url, format_type):
+    """下载并解析字幕文件内容"""
+    try:
+        import requests
+        response = requests.get(url)
+        
+        if response.status_code == 200:
+            content = response.text
+            
+            # 根据不同格式解析内容
+            if format_type == "srt":
+                # 处理SRT格式，保留时间戳信息
+                lines = content.split('\n')
+                parsed_content = []
+                
+                # 用于存储当前字幕条目
+                current_index = None
+                current_timestamp = None
+                current_text = []
+                
+                for line in lines:
+                    line = line.strip()
+                    
+                    # 处理序号行
+                    if line.isdigit():
+                        # 如果已有内容，先保存之前的条目
+                        if current_index is not None and current_timestamp is not None and current_text:
+                            parsed_content.append({
+                                "index": current_index,
+                                "timestamp": current_timestamp,
+                                "text": " ".join(current_text)
+                            })
+                        
+                        # 开始新条目
+                        current_index = line
+                        current_timestamp = None
+                        current_text = []
+                        continue
+                    
+                    # 处理时间戳行
+                    if '-->' in line:
+                        current_timestamp = line
+                        continue
+                    
+                    # 处理文本行
+                    if line:
+                        current_text.append(line)
+                
+                # 添加最后一个条目
+                if current_index is not None and current_timestamp is not None and current_text:
+                    parsed_content.append({
+                        "index": current_index,
+                        "timestamp": current_timestamp,
+                        "text": " ".join(current_text)
+                    })
+                
+                return {
+                    "format": format_type,
+                    "raw_content": content,
+                    "parsed_content": parsed_content
+                }
+                
+            elif format_type == "vtt":
+                # 简单处理VTT格式，提取文本内容
+                lines = content.split('\n')
+                parsed_content = []
+                current_text = ""
+                
+                # 跳过VTT头部
+                start_parsing = False
+                
+                for line in lines:
+                    if not start_parsing:
+                        if line.strip() == "":
+                            start_parsing = True
+                        continue
+                    
+                    # 跳过时间戳行
+                    if '-->' in line:
+                        if current_text:
+                            parsed_content.append(current_text.strip())
+                            current_text = ""
+                        continue
+                    
+                    # 收集文本行
+                    if line.strip():
+                        current_text += line + " "
+                    elif current_text:
+                        parsed_content.append(current_text.strip())
+                        current_text = ""
+                
+                # 添加最后一段文本
+                if current_text:
+                    parsed_content.append(current_text.strip())
+                
+                return {
+                    "format": format_type,
+                    "raw_content": content,
+                    "parsed_content": parsed_content
+                }
+            
+            else:
+                # 其他格式直接返回原始内容
+                return {
+                    "format": format_type,
+                    "raw_content": content,
+                    "parsed_content": [content]
+                }
+        else:
+            return {
+                "format": format_type,
+                "error": f"下载失败: HTTP状态码 {response.status_code}"
+            }
+    
+    except Exception as e:
+        return {
+            "format": format_type,
+            "error": f"解析错误: {str(e)}"
+        }
+
+def check_transcribe_job_status(job_name):
+    """检查AWS Transcribe任务状态"""
+    try:
+        # 创建Transcribe客户端，指定us-west-2区域
+        transcribe_client = boto3.client('transcribe', region_name='us-west-2')
+        
+        # 获取任务状态
+        response = transcribe_client.get_transcription_job(
+            TranscriptionJobName=job_name
+        )
+        
+        # 提取任务状态
+        job_status = response['TranscriptionJob']['TranscriptionJobStatus']
+        
+        # 根据状态返回不同的信息
+        if job_status == 'COMPLETED':
+            # 任务完成，获取转录结果
+            transcript_uri = response['TranscriptionJob']['Transcript']['TranscriptFileUri']
+            
+            # 获取字幕文件URI（如果有）
+            subtitle_files = {}
+            subtitle_contents = {}
+            
+            if 'Subtitles' in response['TranscriptionJob']:
+                for subtitle in response['TranscriptionJob']['Subtitles'].get('SubtitleFileUris', []):
+                    # 从URI中提取格式，处理带有安全令牌的URL
+                    if '?' in subtitle:
+                        # 如果URL包含查询参数，从基本部分提取格式
+                        base_url = subtitle.split('?')[0]
+                        format_match = base_url.split('.')[-1]
+                    else:
+                        format_match = subtitle.split('.')[-1]
+                    
+                    # 检查是否是支持的格式
+                    if format_match in ['srt', 'vtt']:
+                        subtitle_files[format_match] = subtitle
+                        # 下载并解析字幕文件内容
+                        subtitle_contents[format_match] = parse_subtitle_file(subtitle, format_match)
+                        print(f"已处理 {format_match} 格式字幕")
+                    else:
+                        print(f"不支持的字幕格式: {format_match}")
+            
+            # 下载转录结果
+            import requests
+            transcript_response = requests.get(transcript_uri)
+            transcript_data = transcript_response.json()
+            
+            # 提取转录文本
+            transcript_text = transcript_data['results']['transcripts'][0]['transcript']
+            
+            # 获取语言代码
+            language_code = response['TranscriptionJob']['LanguageCode']
+            source_language = language_code.split('-')[0]  # 提取主要语言代码，如'fr-FR'变为'fr'
+            
+            # 翻译转录文本
+            translated_transcript = translate_text(transcript_text, source_language)
+            
+            # 翻译字幕内容
+            if "srt" in subtitle_contents:
+                srt_content = subtitle_contents["srt"]
+                if "parsed_content" in srt_content and isinstance(srt_content["parsed_content"], list):
+                    for item in srt_content["parsed_content"]:
+                        if isinstance(item, dict) and "text" in item:
+                            # 翻译字幕文本
+                            item["translated_text"] = translate_text(item["text"], source_language)
+            
+            # 构建结果
+            result = {
+                "status": "COMPLETED",
+                "transcript": transcript_text,
+                "translated_transcript": translated_transcript,
+                "subtitle_files": subtitle_files,
+                "subtitle_contents": subtitle_contents,
+                "message": "转录任务已完成！",
+                "source_language": source_language
+            }
+            
+            return result
+            
+        elif job_status == 'FAILED':
+            # 任务失败
+            failure_reason = response['TranscriptionJob'].get('FailureReason', '未知错误')
+            return {
+                "status": "FAILED",
+                "message": f"转录任务失败: {failure_reason}"
+            }
+            
+        else:
+            # 任务仍在进行中
+            progress = response['TranscriptionJob'].get('Progress', 0)
+            return {
+                "status": job_status,
+                "progress": progress,
+                "message": f"转录任务状态: {job_status}, 进度: {progress}%"
+            }
+            
+    except Exception as e:
+        return {
+            "status": "ERROR",
+            "message": f"检查任务状态时出错: {str(e)}"
+        }
+
 def extract_video_frames(video_path, x, y, width, height, fps):
     """从视频中提取指定区域的帧"""
     if not video_path or not isinstance(video_path, str):
@@ -549,6 +885,13 @@ def create_video_subtitles_ui():
                 # 添加下载按钮
                 download_button = gr.Button("生成下载链接", variant="primary")
                 download_link = gr.HTML(visible=False)
+                
+                # 字幕文件链接显示 - 移动到下载链接下方
+                subtitle_links = gr.HTML(
+                    label="字幕文件链接",
+                    value="",
+                    visible=True
+                )
             
             with gr.Column(scale=2):
                 # 视频列表区域
@@ -562,6 +905,31 @@ def create_video_subtitles_ui():
                 
                 由于S3视频文件较大，下载后观看效果更佳。点击"生成下载链接"按钮下载视频。
                 """)
+                
+                # 添加语言选择和Transcribe按钮
+                transcribe_language = gr.Dropdown(
+                    choices=["SA", "JP", "KR", "FR", "IT", "DE", "UA", "TR"],
+                    label="转录语言",
+                    value="FR"
+                )
+                transcribe_button = gr.Button("Transcribe视频语音", variant="primary")
+                
+                # 添加任务状态检查按钮和任务ID输入框
+                with gr.Row():
+                    job_name_input = gr.Textbox(
+                        label="转录任务ID",
+                        placeholder="输入任务ID以检查状态",
+                        interactive=True
+                    )
+                    check_status_button = gr.Button("检查任务状态", variant="secondary")
+                
+                # 转录结果显示
+                transcribe_result = gr.Textbox(
+                    label="转录结果",
+                    value="",
+                    lines=10,
+                    interactive=False
+                )
 
                 # 视频上传与播放区域合并，添加视频区域选择功能
         with gr.Row():
@@ -920,6 +1288,176 @@ def create_video_subtitles_ui():
             fn=generate_download_link,
             inputs=[video_keys, video_urls, selected_row_index],
             outputs=download_link
+        )
+        
+        # 添加Transcribe按钮事件处理函数
+        def handle_transcribe(metadata_list, selected_index, language_code):
+            """处理视频转录请求"""
+            if not metadata_list or selected_index is None:
+                return "请先选择一个视频文件", "", False
+            
+            if selected_index < len(metadata_list):
+                selected_meta = metadata_list[selected_index]
+                video_key = selected_meta["key"]
+                
+                # 获取视频路径
+                video_name = selected_meta["name"]
+                video_key = selected_meta["key"]
+                
+                # 从视频存储路径中获取基础S3路径
+                base_s3_path = video_s3_path.value
+                if base_s3_path.startswith('s3://'):
+                    base_s3_path = base_s3_path[5:]  # 移除's3://'前缀
+                
+                # 解析基础路径中的bucket
+                base_parts = base_s3_path.strip('/').split('/', 1)
+                bucket = base_parts[0]  # 从基础路径获取bucket名称
+                
+                # 构建完整的S3 URI
+                s3_uri = f"s3://{bucket}/{video_key}"
+                
+                print(f"处理视频转录请求: {s3_uri}, 语言: {language_code}")
+                print(f"基础S3路径: {base_s3_path}, 视频Key: {video_key}")
+                
+                # 调用转录函数
+                result = transcribe_video(s3_uri, language_code)
+                
+                # 处理返回结果
+                if isinstance(result, dict):
+                    # 如果任务已启动，自动填充任务ID到输入框
+                    if result.get("status") == "STARTED" and "job_name" in result:
+                        job_name = result["job_name"]
+                        return result["message"], job_name, False
+                    elif result.get("status") == "ERROR":
+                        return result["message"], "", False
+                    else:
+                        return str(result), "", False
+                else:
+                    # 兼容旧格式
+                    return str(result), "", False
+            return "无法获取所选视频信息", "", False
+        
+        # 添加检查任务状态的函数
+        def handle_check_status(job_name):
+            """检查转录任务状态"""
+            if not job_name:
+                return "请输入有效的任务ID", False, ""
+            
+            # 调用检查状态函数
+            result = check_transcribe_job_status(job_name)
+            
+            # 添加调试信息
+            print(f"检查任务状态返回结果: {result.get('status', 'UNKNOWN')}")
+            if "subtitle_contents" in result:
+                print(f"字幕内容类型: {type(result['subtitle_contents'])}")
+                print(f"字幕内容格式: {list(result['subtitle_contents'].keys()) if isinstance(result['subtitle_contents'], dict) else 'Not a dict'}")
+                if "srt" in result.get("subtitle_contents", {}):
+                    srt_content = result["subtitle_contents"]["srt"]
+                    print(f"SRT内容类型: {type(srt_content)}")
+                    print(f"SRT内容键: {list(srt_content.keys()) if isinstance(srt_content, dict) else 'Not a dict'}")
+                    if "parsed_content" in srt_content:
+                        print(f"解析内容类型: {type(srt_content['parsed_content'])}")
+                        print(f"解析内容长度: {len(srt_content['parsed_content'])}")
+                        if srt_content['parsed_content']:
+                            print(f"第一个解析项类型: {type(srt_content['parsed_content'][0])}")
+                            print(f"第一个解析项内容: {srt_content['parsed_content'][0]}")
+            
+            # 处理返回结果
+            if isinstance(result, dict):
+                status = result.get("status", "UNKNOWN")
+                
+                # 如果任务完成，显示转录结果和字幕链接
+                if status == "COMPLETED" and "transcript" in result:
+                    # 构建字幕文件链接和内容HTML
+                    subtitle_html = "<div style='margin-top: 15px;'>"
+                    
+                    # 添加字幕文件下载链接
+                    subtitle_html += "<h3>字幕文件下载链接</h3>"
+                    
+                    if "subtitle_files" in result and result["subtitle_files"]:
+                        for format_name, url in result["subtitle_files"].items():
+                            subtitle_html += f"""
+                            <div style="margin: 10px 0;">
+                                <a href="{url}" target="_blank" download="subtitle.{format_name}" 
+                                style="display:inline-block; background:#4CAF50; color:white; 
+                                padding:8px 15px; text-decoration:none; border-radius:5px;">
+                                下载 {format_name.upper()} 字幕文件
+                                </a>
+                            </div>
+                            """
+                        
+                        # 添加字幕文件内容展示 - 只显示SRT格式
+                        if "subtitle_contents" in result and result["subtitle_contents"] and "srt" in result["subtitle_contents"]:
+                            subtitle_html += "<h3>字幕文件内容预览</h3>"
+                            
+                            # 只处理SRT格式
+                            content_data = result["subtitle_contents"]["srt"]
+                            subtitle_html += "<div style='margin-top: 20px;'>"
+                            subtitle_html += "<h4>字幕内容预览:</h4>"
+                            
+                            if "error" in content_data:
+                                subtitle_html += f"<p style='color: red;'>{content_data['error']}</p>"
+                            else:
+                                # 显示解析后的内容
+                                subtitle_html += "<div style='max-height: 300px; overflow-y: auto; padding: 10px; background-color: #f8f9fa; border: 1px solid #ddd; border-radius: 5px;'>"
+                                
+                                if "parsed_content" in content_data and content_data["parsed_content"]:
+                                    for i, item in enumerate(content_data["parsed_content"]):
+                                        if isinstance(item, dict) and "index" in item and "timestamp" in item and "text" in item:
+                                            # 新格式，包含时间戳
+                                            subtitle_html += f"""
+                                            <div style='margin: 10px 0; padding: 5px; border-bottom: 1px solid #eee;'>
+                                                <div style='color: #666; font-size: 0.9em;'>{item["timestamp"]}</div>
+                                                <div style='margin-top: 3px;'>
+                                                    <div style='margin-bottom: 5px;'><strong>原文：</strong>{item["text"]}</div>
+                                                    <div style='color: #0066cc;'><strong>中文翻译：</strong>{item.get("translated_text", "无翻译")}</div>
+                                                </div>
+                                            </div>
+                                            """
+                                        else:
+                                            # 兼容旧格式
+                                            subtitle_html += f"<p style='margin: 5px 0;'>{i+1}. {item}</p>"
+                                else:
+                                    subtitle_html += "<p>无法解析字幕内容</p>"
+                                    
+                                subtitle_html += "</div>"
+                            
+                            subtitle_html += "</div>"
+                    else:
+                        subtitle_html += "<p>没有可用的字幕文件</p>"
+                    
+                    subtitle_html += "</div>"
+                    
+                    # 返回转录文本（包括原文和中文翻译）和字幕链接
+                    transcript_display = f"{result['message']}\n\n"
+                    transcript_display += "转录文本(原文):\n"
+                    transcript_display += f"{result['transcript']}\n\n"
+                    transcript_display += "转录文本(中文翻译):\n"
+                    transcript_display += f"{result.get('translated_transcript', '无翻译')}"
+                    
+                    return transcript_display, True, subtitle_html
+                elif status == "FAILED":
+                    return result["message"], False, ""
+                else:
+                    # 任务仍在进行中
+                    progress_info = f"进度: {result.get('progress', 0)}%" if "progress" in result else ""
+                    return f"{result['message']}\n{progress_info}", False, ""
+            else:
+                # 兼容旧格式
+                return str(result), False, ""
+        
+        # 注册Transcribe按钮事件
+        transcribe_button.click(
+            fn=handle_transcribe,
+            inputs=[video_keys, selected_row_index, transcribe_language],
+            outputs=[transcribe_result, job_name_input, subtitle_links]
+        )
+        
+        # 注册检查状态按钮事件
+        check_status_button.click(
+            fn=handle_check_status,
+            inputs=job_name_input,
+            outputs=[transcribe_result, subtitle_links, subtitle_links]  # 第三个参数是HTML内容
         )
         
         upload_video.change(
