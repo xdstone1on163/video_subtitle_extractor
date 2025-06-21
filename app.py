@@ -346,16 +346,117 @@ def create_subtitle_recognition_ui():
     with gr.Column() as subtitle_ui:
         # 创建状态变量存储图片元数据
         image_keys = gr.State([])
+        area_selection = gr.State({"x": 120, "y": 1300, "width": 850, "height": 220})
         
+        # 全局变量存储提取的帧路径
+        global extracted_frame_paths
+        
+        # 视频上传与播放区域
+        with gr.Row():
+            with gr.Column():
+                # 文件上传和播放组件
+                upload_video = gr.Video(
+                    label="上传或播放视频（可直接拖拽上传本地视频）",
+                    interactive=True,
+                    height=400
+                )
+                
+                # 添加视频分辨率显示
+                video_dimensions = gr.HTML(
+                    """
+                    <div style="text-align: center; margin-top: 10px; padding: 10px; background-color: #f0f0f0; border-radius: 5px;">
+                        <h3 style="margin: 0;">视频分辨率</h3>
+                        <p id="video-dimensions-text" style="font-size: 16px; margin: 5px 0;">请上传视频以查看分辨率信息</p>
+                    </div>
+                    """
+                )
+
+        # 区域选择和帧提取控件
         with gr.Row():
             with gr.Column(scale=1):
-                # S3配置区域（从左侧栏加载，这里保持UI一致性）
+                gr.Markdown("### 视频区域选择与帧提取")
+                gr.Markdown("*提示：上传视频后请设置截取区域坐标和尺寸*")
+                
+                # 区域选择坐标
+                with gr.Row():
+                    x_input = gr.Number(label="X 坐标", value=120, step=1)
+                    y_input = gr.Number(label="Y 坐标", value=1300, step=1)
+                
+                with gr.Row():
+                    width_input = gr.Number(label="宽度", value=850, step=1)
+                    height_input = gr.Number(label="高度", value=220, step=1)
+                
+                with gr.Row():
+                    fps_input = gr.Slider(
+                        label="截图频率 (帧/秒)", 
+                        minimum=0.1, 
+                        maximum=10.0, 
+                        value=1.0, 
+                        step=0.1
+                    )
+                
+                # 提取按钮
+                video_extract_button = gr.Button("开始截取", variant="primary")
+                
+                # 提取结果信息
+                extract_info = gr.Textbox(
+                    label="提取结果信息", 
+                    value="", 
+                    lines=4,
+                    interactive=False
+                )
+                
+                # 待处理截图的S3存储路径
                 subtitle_s3_path = gr.Textbox(
-                    label="待处理视频S3存储路径",
+                    label="待处理截图的S3存储路径",
                     placeholder="例如: s3://bucket-name/folder/",
                     value="s3://general-demo-3/madhouse-ads-videos/subtitle-screen-shots/french1/"
                 )
                 
+                # 浏览按钮 - 添加variant="primary"使颜色与其他按钮一致
+                browse_button = gr.Button("浏览S3图片", variant="primary")
+
+            with gr.Column(scale=2):
+                # 提取的帧展示
+                extracted_frames = gr.Gallery(
+                    label="提取的帧",
+                    columns=3,
+                    height=400,
+                    elem_id="extracted_frames_gallery"
+                )
+                
+                # 添加索引输入框，用于选择要删除的帧
+                delete_frame_index = gr.Number(
+                    label="输入要删除的帧索引 (从0开始)",
+                    value=0,
+                    step=1,
+                    precision=0
+                )
+                
+                # 添加删除按钮
+                delete_frames_btn = gr.Button("删除选中的帧", variant="secondary")
+                
+                # 添加S3上传功能
+                with gr.Row():
+                    upload_s3_path = gr.Textbox(
+                        label="S3 上传目录",
+                        placeholder="例如: s3://bucket-name/screenshots/",
+                        value="s3://general-demo-3/madhouse-ads-videos/subtitle-screen-shots/"
+                    )
+                    s3_upload_button = gr.Button("上传到S3", variant="primary")
+                
+                # 上传结果信息
+                s3_upload_result = gr.Textbox(
+                    label="上传结果",
+                    value="",
+                    lines=2,
+                    interactive=False
+                )
+        
+        # 重新组织字幕截图文字识别界面，按照用户要求调整布局
+        with gr.Row():
+            # 左侧列：模型选择、语言选择、提示词、处理按钮和结果显示
+            with gr.Column(scale=1):
                 # 模型和语言选择区域
                 model_dropdown = gr.Dropdown(
                     choices=["Claude 3 Opus", "Claude 3 Sonnet", "Claude 3.5 Haiku", "Claude 3.5 Sonnet v1", "Claude 3.5 Sonnet v2", "Claude 3.7 Sonnet", "Nova Lite", "Nova Micro", "Nova Pro"],
@@ -369,10 +470,7 @@ def create_subtitle_recognition_ui():
                     value="FR"
                 )
                 
-                # 浏览按钮
-                browse_button = gr.Button("浏览S3图片")
-                
-                # 系统和用户提示词
+                # 提示词
                 system_prompt = gr.Textbox(
                     label="系统提示词",
                     value="你是一个小语种字幕提取专家",
@@ -381,31 +479,35 @@ def create_subtitle_recognition_ui():
                 
                 user_prompt = gr.Textbox(
                     label="用户提示词",
-                    value="请提取图片中的字幕,并用json的格式输出'原文'和翻译后的'中文',并检查原文是否有任何语法或者拼写错误，把检查结果也输出在‘语法和拼写检查结果‘里",
-                    lines=3
+                    value="请提取图片中的字幕,并用json的格式输出'原文'和翻译后的'中文',并检查原文是否有任何语法或者拼写错误，把检查结果也输出在'语法和拼写检查结果'里",
+                    lines=5
                 )
                 
-                # 结果显示区域
-                result_text = gr.Textbox(label="识别文字结果", lines=8)
-                
-            with gr.Column(scale=2):
-                # 图片预览和选择区域
-                with gr.Row():
-                    image_gallery = gr.Gallery(
-                        label="S3图片预览",
-                        columns=3,
-                        height=400,
-                        object_fit="contain"
-                    )
-                    
-                with gr.Row():
-                    selected_image = gr.Image(
-                        label="选中的图片",
-                        type="pil",
-                        height=400
-                    )
-                
+                # 处理按钮放在提示词下面
                 extract_button = gr.Button("图片处理", variant="primary")
+                
+                # 结果显示区域放在处理按钮下面
+                result_text = gr.Textbox(
+                    label="识别文字结果", 
+                    lines=20
+                )
+            
+            # 右侧列：图片预览和选中的图片
+            with gr.Column(scale=2):
+                # 图片预览区域
+                image_gallery = gr.Gallery(
+                    label="S3图片预览",
+                    columns=3,
+                    height=350,
+                    object_fit="contain"
+                )
+                
+                # 选中的图片
+                selected_image = gr.Image(
+                    label="选中的图片",
+                    type="pil",
+                    height=350
+                )
         
         # 事件处理函数
         def update_gallery(s3_path):
@@ -437,6 +539,256 @@ def create_subtitle_recognition_ui():
             fn=extract_text, 
             inputs=[selected_image, model_dropdown, language_dropdown, system_prompt, user_prompt],
             outputs=result_text
+        )
+        
+        # 添加视频处理相关的事件处理函数
+        def update_area_selection(x, y, width, height):
+            """更新区域选择参数"""
+            return {"x": int(x), "y": int(y), "width": int(width), "height": int(height)}
+            
+        def extract_frames_from_video(video_path, selection, fps):
+            """从视频中提取帧"""
+            if not video_path:
+                return "请先上传或选择一个视频", []
+            
+            x = selection["x"]
+            y = selection["y"]
+            width = selection["width"]
+            height = selection["height"]
+            
+            # 获取视频分辨率以验证坐标
+            cap = cv2.VideoCapture(video_path)
+            if cap.isOpened():
+                video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                cap.release()
+                
+                # 验证坐标是否在视频范围内
+                if x < 0 or y < 0 or x >= video_width or y >= video_height:
+                    error_msg = f"坐标错误：(x={x}, y={y}) 不在视频范围 (0~{video_width-1}, 0~{video_height-1}) 内"
+                    return error_msg, []
+                
+                if x + width > video_width:
+                    old_width = width
+                    width = video_width - x
+                    info_msg = f"注意: 宽度超出范围，已自动调整为 {width} (原值: {old_width})"
+                else:
+                    info_msg = ""
+                
+                if y + height > video_height:
+                    old_height = height
+                    height = video_height - y
+                    if info_msg:
+                        info_msg += f"\n高度超出范围，已自动调整为 {height} (原值: {old_height})"
+                    else:
+                        info_msg = f"注意: 高度超出范围，已自动调整为 {height} (原值: {old_height})"
+            else:
+                info_msg = "警告: 无法读取视频信息，坐标可能不准确"
+            
+            # 确保宽度和高度不为0
+            if width <= 0:
+                width = min(200, video_width - x)
+            if height <= 0:
+                height = min(200, video_height - y)
+                
+            # 调用提取帧函数
+            info, frames = extract_video_frames(video_path, x, y, width, height, fps)
+            
+            # 添加坐标信息到结果中
+            complete_info = f"视频分辨率: {video_width}x{video_height}\n"
+            complete_info += f"提取区域: 从 ({x},{y}) 开始，宽度 {width}，高度 {height}\n"
+            complete_info += f"实际区域: ({x},{y}) 到 ({x+width},{y+height})\n"
+            
+            if info_msg:
+                complete_info += f"{info_msg}\n"
+                
+            complete_info += info
+            
+            # 将提取的帧保存到全局变量中，方便后续上传
+            global extracted_frame_paths
+            extracted_frame_paths = frames
+            
+            return complete_info, frames
+            
+        def delete_frame_by_index(index):
+            """删除指定索引的帧"""
+            global extracted_frame_paths
+            
+            index = int(index) # 确保是整数
+            
+            if not extracted_frame_paths:
+                return "没有可删除的帧，请先提取视频帧", extracted_frame_paths
+                
+            # 确保索引在有效范围内
+            if index >= 0 and index < len(extracted_frame_paths):
+                # 删除指定索引的帧
+                deleted_path = extracted_frame_paths.pop(index)
+                
+                # 更新提示信息
+                result = f"已删除索引为 {index} 的帧，当前剩余 {len(extracted_frame_paths)} 帧"
+                
+                return result, extracted_frame_paths
+            else:
+                return f"无效的索引: {index}。有效范围: 0-{len(extracted_frame_paths)-1}", extracted_frame_paths
+                
+        def upload_frames_to_s3(s3_path):
+            """将提取的帧上传到S3"""
+            global extracted_frame_paths
+            
+            if not extracted_frame_paths or len(extracted_frame_paths) == 0:
+                return "没有可上传的帧，请先提取视频帧", None
+                
+            if not s3_path:
+                return "请提供有效的S3路径", None
+                
+            try:
+                # 处理s3://前缀
+                if s3_path.startswith('s3://'):
+                    s3_path = s3_path[5:]  # 移除's3://'前缀
+                    
+                # 解析bucket和prefix
+                parts = s3_path.strip('/').split('/', 1)
+                if len(parts) < 2:
+                    return f"无效的S3路径: {s3_path}，格式应为 s3://bucket-name/path/", None
+                    
+                bucket = parts[0]
+                prefix = parts[1]
+                
+                # 确保prefix以/结尾
+                if not prefix.endswith('/'):
+                    prefix += '/'
+                    
+                # 创建S3客户端
+                s3_client = boto3.client('s3')
+                
+                # 创建时间戳文件夹
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                folder_prefix = f"{prefix}{timestamp}/"
+                
+                # 上传文件
+                success_count = 0
+                for idx, frame_path in enumerate(extracted_frame_paths):
+                    if os.path.exists(frame_path):
+                        file_name = os.path.basename(frame_path)
+                        s3_key = f"{folder_prefix}{file_name}"
+                        
+                        s3_client.upload_file(
+                            Filename=frame_path,
+                            Bucket=bucket,
+                            Key=s3_key
+                        )
+                        success_count += 1
+                
+                # 返回上传结果和完整的S3路径
+                full_s3_path = f"s3://{bucket}/{folder_prefix}"
+                return f"成功上传 {success_count} 帧到 {full_s3_path}", full_s3_path
+                
+            except Exception as e:
+                print(f"上传到S3时出错: {str(e)}")
+                return f"上传失败: {str(e)}"
+                
+        def handle_subtitle_video_upload(video_path):
+            """处理字幕识别页面的视频上传"""
+            if video_path is None:
+                return None, "请上传视频文件"
+            
+            try:
+                # 获取文件信息
+                file_size = os.path.getsize(video_path)
+                file_name = os.path.basename(video_path)
+                
+                # 获取视频分辨率
+                cap = cv2.VideoCapture(video_path)
+                if cap.isOpened():
+                    # 获取视频属性
+                    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    duration = frame_count / fps if fps > 0 else 0
+                    
+                    # HTML显示
+                    dimensions_html = f"""
+                    <div style="padding: 15px; background-color: #f0f8ff; border: 1px solid #add8e6; border-radius: 5px; margin: 10px 0;">
+                        <h3 style="color: #2c3e50; margin-top: 0;">视频分辨率信息</h3>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                            <div style="flex: 1; padding-right: 10px;">
+                                <strong>宽度 (X轴):</strong> {width} 像素
+                            </div>
+                            <div style="flex: 1; padding-left: 10px;">
+                                <strong>高度 (Y轴):</strong> {height} 像素
+                            </div>
+                        </div>
+                        <div style="background-color: #e8f4f8; padding: 10px; border-radius: 3px;">
+                            <strong>坐标系统:</strong> 原点(0,0)位于左上角，X向右，Y向下
+                        </div>
+                    </div>
+                    """
+                    
+                    # 释放资源
+                    cap.release()
+                    
+                    return video_path, dimensions_html
+                else:
+                    return video_path, "<p>无法读取视频分辨率信息</p>"
+            except Exception as e:
+                print(f"视频上传错误: {str(e)}")
+                return None, f"<p>视频处理错误: {str(e)}</p>"
+        
+        # 注册视频上传事件
+        upload_video.change(
+            fn=handle_subtitle_video_upload,
+            inputs=upload_video,
+            outputs=[upload_video, video_dimensions]
+        )
+        
+        # 注册区域选择事件
+        gr.on(
+            [x_input.change, y_input.change, width_input.change, height_input.change],
+            fn=update_area_selection,
+            inputs=[x_input, y_input, width_input, height_input],
+            outputs=area_selection
+        )
+        
+        # 注册帧提取事件
+        video_extract_button.click(
+            fn=extract_frames_from_video,
+            inputs=[upload_video, area_selection, fps_input],
+            outputs=[extract_info, extracted_frames]
+        )
+        
+        # 注册删除帧事件
+        delete_frames_btn.click(
+            fn=delete_frame_by_index,
+            inputs=delete_frame_index,
+            outputs=[s3_upload_result, extracted_frames]
+        )
+        
+        # 定义上传后格式化输出的函数
+        def upload_and_format_result(s3_path):
+            """上传帧到S3并格式化输出结果，同时更新浏览路径"""
+            result_text, full_s3_path = upload_frames_to_s3(s3_path)
+            
+            # 如果上传成功且返回了有效的S3路径
+            if full_s3_path:
+                # 返回格式化的结果字符串和上传路径（用于更新浏览路径）
+                return f"成功上传帧到 {full_s3_path}", full_s3_path
+            else:
+                # 上传失败，返回错误信息，不更新浏览路径
+                return result_text, subtitle_s3_path.value
+        
+        # 注册S3上传事件 - 完成上传并更新浏览路径
+        s3_upload_button.click(
+            fn=upload_and_format_result,
+            inputs=upload_s3_path,
+            outputs=[s3_upload_result, subtitle_s3_path]
+        )
+        
+        # 浏览按钮点击事件 - 手动触发浏览
+        browse_button.click(
+            fn=update_gallery, 
+            inputs=subtitle_s3_path, 
+            outputs=[image_gallery, image_keys]
         )
         
         return subtitle_ui, image_keys, subtitle_s3_path
@@ -930,98 +1282,6 @@ def create_video_subtitles_ui():
                     lines=10,
                     interactive=False
                 )
-
-                # 视频上传与播放区域合并，添加视频区域选择功能
-        with gr.Row():
-            with gr.Column():
-                # 文件上传和播放组件合并
-                upload_video = gr.Video(
-                    label="上传或播放视频（可直接拖拽上传本地视频）",
-                    interactive=True,
-                    height=400
-                )
-                
-                # 添加视频分辨率显示（静态HTML，不包含鼠标交互）
-                video_dimensions = gr.HTML(
-                    """
-                    <div style="text-align: center; margin-top: 10px; padding: 10px; background-color: #f0f0f0; border-radius: 5px;">
-                        <h3 style="margin: 0;">视频分辨率</h3>
-                        <p id="video-dimensions-text" style="font-size: 16px; margin: 5px 0;">请上传视频以查看分辨率信息</p>
-                    </div>
-                    """
-                )
-
-        # 区域选择和帧提取控件
-        with gr.Row():
-            with gr.Column(scale=1):
-                gr.Markdown("### 视频区域选择与帧提取")
-                gr.Markdown("*提示：上传视频后请设置截取区域坐标和尺寸*")
-                
-                # 区域选择坐标
-                with gr.Row():
-                    x_input = gr.Number(label="X 坐标", value=120, step=1)
-                    y_input = gr.Number(label="Y 坐标", value=1300, step=1)
-                
-                with gr.Row():
-                    width_input = gr.Number(label="宽度", value=850, step=1)
-                    height_input = gr.Number(label="高度", value=220, step=1)
-                
-                with gr.Row():
-                    fps_input = gr.Slider(
-                        label="截图频率 (帧/秒)", 
-                        minimum=0.1, 
-                        maximum=10.0, 
-                        value=1.0, 
-                        step=0.1
-                    )
-                
-                # 提取按钮
-                extract_button = gr.Button("开始截取", variant="primary")
-                
-                # 提取结果信息
-                extract_info = gr.Textbox(
-                    label="提取结果信息", 
-                    value="", 
-                    lines=4,
-                    interactive=False
-                )
-
-            with gr.Column(scale=2):
-                # 提取的帧展示
-                extracted_frames = gr.Gallery(
-                    label="提取的帧",
-                    columns=3,
-                    height=400,
-                    elem_id="extracted_frames_gallery"
-                )
-                
-                # 添加索引输入框，用于选择要删除的帧
-                delete_frame_index = gr.Number(
-                    label="输入要删除的帧索引 (从0开始)",
-                    value=0,
-                    step=1,
-                    precision=0
-                )
-                
-                # 添加删除按钮
-                delete_frames_btn = gr.Button("删除选中的帧", variant="secondary")
-                
-                # 添加S3上传功能
-                with gr.Row():
-                    upload_s3_path = gr.Textbox(
-                        label="S3 上传目录",
-                        placeholder="例如: s3://bucket-name/screenshots/",
-                        value="s3://general-demo-3/madhouse-ads-videos/subtitle-screen-shots/"
-                    )
-                    s3_upload_button = gr.Button("上传到S3", variant="primary")
-                
-                # 上传结果信息
-                s3_upload_result = gr.Textbox(
-                    label="上传结果",
-                    value="",
-                    lines=2,
-                    interactive=False
-                )
         
         # 事件处理函数
         def update_s3_video_list(s3_path):
@@ -1276,12 +1536,13 @@ def create_video_subtitles_ui():
         
         def handle_s3_video_selection(evt: gr.SelectData, metadata_list, url_list):
             selected_index = evt.index[0]  # 获取选中的行
-            return select_s3_video(evt, metadata_list, url_list) + (selected_index,)
+            info_text = select_s3_video(evt, metadata_list, url_list)
+            return info_text[1], selected_index  # 只返回视频信息和选中的索引
             
         s3_video_list.select(
             fn=handle_s3_video_selection,
             inputs=[video_keys, video_urls],
-            outputs=[upload_video, s3_video_info, selected_row_index]
+            outputs=[s3_video_info, selected_row_index]
         )
         
         download_button.click(
@@ -1460,35 +1721,49 @@ def create_video_subtitles_ui():
             outputs=[transcribe_result, subtitle_links, subtitle_links]  # 第三个参数是HTML内容
         )
         
-        upload_video.change(
-            fn=handle_upload,
-            inputs=upload_video,
-            outputs=[upload_video, s3_video_info, x_input, y_input, width_input, height_input, video_dimensions]
-        )
-        
-        # 注册区域选择和帧提取事件
-        gr.on(
-            [x_input.change, y_input.change, width_input.change, height_input.change],
-            fn=update_area_selection,
-            inputs=[x_input, y_input, width_input, height_input],
-            outputs=area_selection
-        )
-        
-        # 确保始终保持默认值
-        def reset_to_defaults():
-            return 120, 1300, 850, 220
+        # 修改为只返回视频信息，不设置坐标
+        def handle_upload_simplified(video_path):
+            """处理本地视频上传，简化版本只返回视频信息"""
+            if video_path is None:
+                return None, "请上传视频文件"
             
-        video_s3_path.change(
-            fn=reset_to_defaults,
-            inputs=[],
-            outputs=[x_input, y_input, width_input, height_input]
-        )
+            try:
+                # 获取文件信息
+                file_size = os.path.getsize(video_path)
+                file_name = os.path.basename(video_path)
+                
+                # 获取视频分辨率
+                cap = cv2.VideoCapture(video_path)
+                if cap.isOpened():
+                    # 获取视频属性
+                    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    duration = frame_count / fps if fps > 0 else 0
+                    
+                    # 设置视频信息文本
+                    video_info = f"文件名: {file_name}\n"
+                    video_info += f"大小: {file_size/1024/1024:.2f} MB\n"
+                    video_info += f"分辨率: {width}x{height} 像素\n"
+                    video_info += f"帧率: {fps:.2f} fps\n"
+                    video_info += f"时长: {duration/60:.2f} 分钟\n"
+                    
+                    # 释放资源
+                    cap.release()
+                    
+                    return video_path, video_info
+                else:
+                    return video_path, "无法读取视频信息"
+            except Exception as e:
+                print(f"视频上传错误: {str(e)}")
+                return None, f"视频处理错误: {str(e)}"
+                
+        # 删除对不存在的upload_video的引用
         
-        extract_button.click(
-            fn=extract_frames_from_video,
-            inputs=[upload_video, area_selection, fps_input],
-            outputs=[extract_info, extracted_frames]
-        )
+        # 删除对不存在的坐标输入控件的引用
+        
+        # 删除对不存在的extract_button和upload_video的引用
         
         # 删除指定索引的帧
         def delete_frame_by_index(index):
@@ -1511,21 +1786,13 @@ def create_video_subtitles_ui():
             else:
                 return f"无效的索引: {index}。有效范围: 0-{len(extracted_frame_paths)-1}", extracted_frame_paths
         
-        # 注册删除按钮事件
-        delete_frames_btn.click(
-            fn=delete_frame_by_index,
-            inputs=delete_frame_index,
-            outputs=[s3_upload_result, extracted_frames]
-        )
+        # 删除对不存在的delete_frames_btn的引用
         
-        # S3上传按钮事件
-        s3_upload_button.click(
-            fn=upload_frames_to_s3,
-            inputs=upload_s3_path,
-            outputs=s3_upload_result
-        )
+        # 删除对不存在的s3_upload_button的引用
         
-        return video_ui, video_s3_path, upload_s3_path
+        # 创建一个空的上传路径变量，以保持返回值结构一致
+        upload_s3_path_placeholder = gr.State("s3://general-demo-3/madhouse-ads-videos/subtitle-screen-shots/")
+        return video_ui, video_s3_path, upload_s3_path_placeholder
 
 def create_app():
     """创建主应用"""
@@ -1557,12 +1824,6 @@ def create_app():
                     label="视频存储路径",
                     placeholder="例如: s3://bucket-name/videos/",
                     value="s3://general-demo-3/madhouse-ads-videos/",
-                )
-                
-                s3_screenshots_path = gr.Textbox(
-                    label="字幕截图路径",
-                    placeholder="例如: s3://bucket-name/screenshots/",
-                    value="s3://general-demo-3/madhouse-ads-videos/subtitle-screen-shots/french1/"
                 )
                 
                 s3_upload_path = gr.Textbox(
@@ -1605,18 +1866,17 @@ def create_app():
             }
             
         # 加载S3设置函数
-        def load_s3_settings(videos_path, screenshots_path, upload_path):
+        def load_s3_settings(videos_path, upload_path):
             # 更新状态变量
             return {
-                # 更新字幕识别UI中的路径
-                subtitle_s3_path: gr.Textbox(value=screenshots_path),
+                # 更新字幕识别UI中的路径 - 使用上传路径作为浏览路径
+                subtitle_s3_path: gr.Textbox(value=upload_path),
                 # 更新视频字幕UI中的路径
                 video_s3_path: gr.Textbox(value=videos_path),
                 # 更新上传路径
                 upload_s3_path: gr.Textbox(value=upload_path),
                 # 更新状态变量
                 s3_videos_path_state: videos_path,
-                s3_screenshots_path_state: screenshots_path,
                 s3_upload_path_state: upload_path
             }
         
@@ -1636,14 +1896,13 @@ def create_app():
         # 注册加载设置按钮事件
         load_settings_btn.click(
             fn=load_s3_settings,
-            inputs=[s3_videos_path, s3_screenshots_path, s3_upload_path],
+            inputs=[s3_videos_path, s3_upload_path],
             outputs=[
                 subtitle_s3_path,                          # 字幕识别UI中的路径
                 video_s3_path,                             # 视频字幕UI中的视频路径
                 upload_s3_path,                            # 上传路径
                 s3_videos_path_state,                      # 状态变量
-                s3_screenshots_path_state,
-                s3_upload_path_state
+                s3_upload_path_state                       # 上传路径状态变量
             ]
         )
         
